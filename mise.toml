@@ -1,7 +1,7 @@
 [tools]
 aws-sam = { version = "1.166.1", symlink_bins = "true" }
 caddy = "2.11.4"
-go = "1.26.6"
+go = "1.26.9"
 ruff = "0.16.6"
 
 [tasks.test]
