@@ -209,6 +209,8 @@ into an HTTP error response through its normal error handling configuration.
 
 PRs and issues/bug reports are welcome!
 
+Go 1.26 or newer is required.
+
 If you'd like to develop locally, we use [mise](https://mise.jdx.dev/) commands 
 to lint, format, and test the code.
 
