@@ -1,6 +1,6 @@
-![caddy-lambda logo](meta/caddy_lambda.png)
+![caddy-lambda-licious logo](meta/caddy_lambda_licious.png)
 
-# caddy-lambda
+# caddy-lambda-licious
 
 [Caddy](https://caddyserver.com/) v2 plugin for dispatching requests to [AWS Lambda](https://aws.amazon.com/lambda/).
 
@@ -8,7 +8,7 @@
 
 Use the standard [xcaddy](https://github.com/caddyserver/xcaddy) tool to build a custom `caddy` binary that includes the plugin.
 ```
-xcaddy build --with github.com/danmoz/caddy-lambda
+xcaddy build --with github.com/danmoz/caddy-lambda-licious
 ```
 
 ## Usage
@@ -47,7 +47,7 @@ By default, the plugin will forward events using the `api_gateway_v2` event form
       # Recommended for production: assume a dedicated IAM role
       role_arn arn:aws:iam::123456789012:role/LambdaInvoker
       external_id example-external-id
-      session_name caddy-lambda
+      session_name caddy-lambda-licious
 
       # Useful for local testing:
       # endpoint http://127.0.0.1:3001
@@ -95,7 +95,7 @@ duplicate invocations.
 
 Be careful when increasing `max_body_size`. AWS Lambda limits synchronous invocation payloads to 6 MB, and this limit applies to the complete serialized event sent to Lambda, not just the HTTP request body. Binary request bodies are base64-encoded, increasing their size by approximately 33%, with headers and the event envelope adding further overhead.
 
-The default 4 MiB limit leaves some headroom, but unusually large headers may reduce the maximum safe body size. If the serialized Lambda event exceeds the 6 MB limit, caddy-lambda rejects the request with HTTP `413 Payload Too Large`.
+The default 4 MiB limit leaves some headroom, but unusually large headers may reduce the maximum safe body size. If the serialized Lambda event exceeds the 6 MB limit, caddy-lambda-licious rejects the request with HTTP `413 Payload Too Large`.
 
 ## Response Codes
 
@@ -188,7 +188,7 @@ errors, timeouts, throttling, and malformed responses are returned as Caddy
 handler errors.
 
 Every invocation has a request ID. If the incoming request includes an 
-`X-Request-ID` header, its value is preserved; otherwise, caddy-lambda 
+`X-Request-ID` header, its value is preserved; otherwise, caddy-lambda-licious
 generates a UUID matching the format used by AWS API Gateway. The request ID 
 is used consistently in `requestContext.requestId` and structured logs, and 
 is returned to the client in the `X-Request-ID` response header.

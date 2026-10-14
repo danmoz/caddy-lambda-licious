@@ -1,4 +1,4 @@
-module github.com/danmoz/caddy-lambda
+module github.com/danmoz/caddy-lambda-licious
 
 go 1.25.1
 

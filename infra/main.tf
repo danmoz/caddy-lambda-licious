@@ -16,13 +16,13 @@ provider "aws" {
 variable "lambda_name" {
   description = "Name of the deployed Lambda function"
   type        = string
-  default     = "caddy-lambda-fixture"
+  default     = "caddy-lambda-licious-fixture"
 }
 
 variable "stack_name" {
   description = "Prefix used for AWS resource names"
   type        = string
-  default     = "caddy-lambda-test"
+  default     = "caddy-lambda-licious-test"
 }
 
 data "aws_availability_zones" "available" {
@@ -35,7 +35,7 @@ resource "aws_vpc" "testing" {
   enable_dns_support   = true
 
   tags = {
-    Name = "caddy-lambda-testing-vpc"
+    Name = "caddy-lambda-licious-testing-vpc"
   }
 }
 
@@ -51,7 +51,7 @@ resource "aws_subnet" "public" {
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "caddy-lambda-testing-public-${count.index + 1}"
+    Name = "caddy-lambda-licious-testing-public-${count.index + 1}"
   }
 }
 
