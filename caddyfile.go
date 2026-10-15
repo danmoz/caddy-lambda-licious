@@ -1,4 +1,4 @@
-package caddylambda
+package caddylambdalicious
 
 import (
 	"github.com/caddyserver/caddy/v2"
