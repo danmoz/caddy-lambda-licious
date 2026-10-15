@@ -78,7 +78,7 @@ func (m *Lambda) Provision(ctx caddy.Context) error {
 	}
 
 	if m.Timeout == 0 {
-		m.Timeout = caddy.Duration(10 * time.Second)
+		m.Timeout = caddy.Duration(14 * time.Minute)
 	}
 
 	httpClient := awshttp.NewBuildableClient().WithTransportOptions(func(transport *http.Transport) {

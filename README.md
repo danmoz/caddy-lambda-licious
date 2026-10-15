@@ -62,7 +62,7 @@ By default, the plugin will forward events using the `api_gateway_v2` event form
 | `region`            | AWS region used for the Lambda client.           | (required if no SDK)     |
 | `qualifier`         | Lambda version number or alias to invoke.        | Unqualified function     |
 | `event_format`      | Lambda request and response contract.            | `api_gateway_v2`         |
-| `timeout`           | Max duration of a synchronous invocation.        | `10s`                    |
+| `timeout`           | Max duration of a synchronous invocation.        | `14m`                    |
 | `max_body_size`     | Max request body size; Caddyfile accepts units.  | `4MB`                    |
 | `header_upstream`   | Header values added to the Lambda request.       | Not set                  |
 | `role_arn`          | IAM role to assume before invoking Lambda.       | No role assumption       |
