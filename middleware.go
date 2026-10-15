@@ -144,7 +144,7 @@ func (m *Lambda) Validate() error {
 	}
 
 	switch m.eventFormat() {
-	case eventFormatHTTPJSON, eventFormatAPIGatewayV2:
+	case eventFormatHTTPJSON, eventFormatAPIGatewayV1, eventFormatAPIGatewayV2:
 		return nil
 	default:
 		return fmt.Errorf("unsupported event format %q", m.EventFormat)

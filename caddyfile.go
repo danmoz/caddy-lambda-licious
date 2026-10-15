@@ -29,6 +29,7 @@ func parseCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error)
 //	    qualifier <version or alias>
 //	    endpoint <url>
 //	    region <region>
+//	    event_format <api_gateway_v1|api_gateway_v2|httpjson>
 //	    timeout  <duration>
 //	    max_body_size <bytes>
 //	    role_arn <role ARN>

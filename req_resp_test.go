@@ -9,12 +9,116 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 )
+
+func TestNewRequestForFormatAPIGatewayV1(t *testing.T) {
+	for _, path := range []string{"/", "/items/a%2Fb"} {
+		t.Run(path, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "https://example.test:8443"+path+"?tag=one&tag=two&empty=&literal=a%2Cb", strings.NewReader("\x00\xff"))
+			r.RemoteAddr = "192.0.2.1:1234"
+			r.Header["X-Test"] = []string{"one", "two"}
+			r.Header.Set("Cookie", "session=abc; theme=dark")
+			r.Header.Set("X-Request-ID", "request-v1")
+			r.Header.Set("User-Agent", "test-agent")
+			r.Header.Set("Content-Type", "application/octet-stream")
+			r.Header.Set("X-Forwarded-For", "spoofed")
+			r.Header.Set("X-Forwarded-Proto", "spoofed")
+			r.Header.Set("X-Forwarded-Port", "spoofed")
+			r = r.WithContext(context.WithValue(r.Context(), http.LocalAddrContextKey, &net.TCPAddr{Port: 8443}))
+			r = r.WithContext(context.WithValue(r.Context(), caddyhttp.VarsCtxKey, map[string]any{caddyhttp.ClientIPVarKey: "198.51.100.7"}))
+			payload, err := newRequestForFormat(httptest.NewRecorder(), r, eventFormatAPIGatewayV1, 0, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Check the wire representation, including field names and absence of v2 fields.
+			data, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var event APIGatewayV1Request
+			if err := json.Unmarshal(data, &event); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), `"version"`) || event.Path != r.URL.Path || event.HTTPMethod != http.MethodPost {
+				t.Fatalf("unexpected event: %s", data)
+			}
+			if path == "/" {
+				if event.Resource != "/" || event.PathParameters != nil {
+					t.Fatalf("root routing = %#v", event)
+				}
+			} else if event.Resource != "/{proxy+}" || event.PathParameters["proxy"] != "items/a/b" {
+				t.Fatalf("proxy routing = %#v", event)
+			}
+			if event.Headers["x-test"] != "two" || !reflect.DeepEqual(event.MultiValueHeaders["x-test"], []string{"one", "two"}) {
+				t.Fatalf("header maps = %#v / %#v", event.Headers, event.MultiValueHeaders)
+			}
+			for key, want := range map[string]string{"cookie": "session=abc; theme=dark", "host": "example.test:8443", "x-forwarded-for": "198.51.100.7", "x-forwarded-proto": "https", "x-forwarded-port": "8443"} {
+				if event.Headers[key] != want || !reflect.DeepEqual(event.MultiValueHeaders[key], []string{want}) {
+					t.Errorf("header %s = %q / %#v, want %q", key, event.Headers[key], event.MultiValueHeaders[key], want)
+				}
+			}
+			if event.QueryStringParameters["tag"] != "two" || !reflect.DeepEqual(event.MultiValueQueryStringParameters["tag"], []string{"one", "two"}) || event.QueryStringParameters["literal"] != "a,b" || !reflect.DeepEqual(event.MultiValueQueryStringParameters["empty"], []string{""}) {
+				t.Fatalf("query maps = %#v / %#v", event.QueryStringParameters, event.MultiValueQueryStringParameters)
+			}
+			ctx := event.RequestContext
+			if ctx.ResourcePath != event.Resource || ctx.Path != r.URL.Path || ctx.HTTPMethod != r.Method || ctx.Protocol != "HTTP/1.1" || ctx.RequestID != "request-v1" || ctx.DomainName != "example.test" || ctx.Stage != "$default" || ctx.RequestTime == "" || ctx.RequestTimeEpoch <= 0 || ctx.Identity.SourceIP != "198.51.100.7" || ctx.Identity.UserAgent != "test-agent" {
+				t.Fatalf("request context = %#v", ctx)
+			}
+			if event.Body != "AP8=" || !event.IsBase64Encoded {
+				t.Fatalf("body = %q, base64 = %v", event.Body, event.IsBase64Encoded)
+			}
+		})
+	}
+}
+
+func TestAPIGatewayV1RequestBodyEncoding(t *testing.T) {
+	for _, tt := range []struct {
+		name, contentType, body, wantBody string
+		encoded                           bool
+	}{
+		{name: "empty"},
+		{name: "text", contentType: "text/plain", body: "hello", wantBody: "hello"},
+		{name: "json", contentType: "application/json", body: `{}`, wantBody: `{}`},
+		{name: "missing content type", body: "hello", wantBody: "aGVsbG8=", encoded: true},
+		{name: "binary", contentType: "application/octet-stream", body: "\x00\xff", wantBody: "AP8=", encoded: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tt.body))
+			r.Header.Set("Content-Type", tt.contentType)
+			event := newAPIGatewayV1Request(r, []byte(tt.body))
+			if event.Body != tt.wantBody || event.IsBase64Encoded != tt.encoded {
+				t.Fatalf("body = %q, base64 = %v", event.Body, event.IsBase64Encoded)
+			}
+		})
+	}
+}
+
+func TestParseReplyAPIGatewayV1(t *testing.T) {
+	reply, err := parseReply([]byte(`{"statusCode":201,"headers":{"X-Test":"one","Content-Type":"application/octet-stream","Set-Cookie":"a=1","X-Single":"single"},"multiValueHeaders":{"x-test":["one","two"],"set-cookie":["b=2","c=3"]},"body":"AP8=","isBase64Encoded":true}`), eventFormatAPIGatewayV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHeaders := map[string][]string{"x-test": {"one", "two"}, "content-type": {"application/octet-stream"}, "set-cookie": {"b=2", "c=3", "a=1"}, "x-single": {"single"}}
+	if reply.Meta.Status != 201 || reply.Body != "AP8=" || reply.BodyEncoding != "base64" || !reflect.DeepEqual(reply.Meta.Headers, wantHeaders) {
+		t.Fatalf("reply = %#v, headers = %#v", reply, reply.Meta.Headers)
+	}
+}
+
+func TestParseReplyRejectsInvalidAPIGatewayV1Responses(t *testing.T) {
+	for _, payload := range []string{`null`, `{}`, `{"statusCode":`, `{"statusCode":199}`, `{"statusCode":600}`, `{"statusCode":"200"}`, `{"statusCode":200,"headers":{"x-test":["one"]}}`, `{"statusCode":200,"multiValueHeaders":{"x-test":"one"}}`, `{"statusCode":200,"body":{}}`, `{"statusCode":200,"isBase64Encoded":"true"}`} {
+		t.Run(payload, func(t *testing.T) {
+			if _, err := parseReply([]byte(payload), eventFormatAPIGatewayV1); err == nil {
+				t.Fatal("expected invalid response error")
+			}
+		})
+	}
+}
 
 func TestNewRequestForFormatAPIGatewayV2(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "http://example.test/items?tag=one&tag=two", strings.NewReader("\x00\x01"))
@@ -183,7 +287,7 @@ func TestNewRequestForFormatAppliesUpstreamHeaders(t *testing.T) {
 		"X-Test": {"one", "{http.request.host}"},
 	}
 
-	for _, format := range []string{eventFormatHTTPJSON, eventFormatAPIGatewayV2} {
+	for _, format := range []string{eventFormatHTTPJSON, eventFormatAPIGatewayV1, eventFormatAPIGatewayV2} {
 		payload, err := newRequestForFormat(httptest.NewRecorder(), r, format, 0, configured)
 		if err != nil {
 			t.Fatalf("newRequestForFormat(%q) error = %v", format, err)
@@ -196,6 +300,10 @@ func TestNewRequestForFormatAppliesUpstreamHeaders(t *testing.T) {
 		case *APIGatewayV2Request:
 			if got := request.Headers["x-test"]; got != "one,example.test" {
 				t.Errorf("API Gateway v2 headers = %q, want one,example.test", got)
+			}
+		case *APIGatewayV1Request:
+			if request.Headers["x-test"] != "example.test" || !reflect.DeepEqual(request.MultiValueHeaders["x-test"], []string{"one", "example.test"}) {
+				t.Errorf("API Gateway v1 headers = %#v / %#v", request.Headers, request.MultiValueHeaders)
 			}
 		}
 	}

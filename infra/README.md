@@ -44,6 +44,28 @@ The default region is `us-east-1`, configured as `AWS_REGION` in
 AWS_REGION=ap-southeast-2 mise aws-deploy
 ```
 
+The stack defaults to `api_gateway_v1`. Caddy receives the Terraform
+`event_format` variable through the ECS task environment. To compare against v2:
+
+```sh
+TF_VAR_event_format=api_gateway_v2 mise aws-deploy
+```
+
+Run `mise aws-deploy` again to rebuild the image from your current checkout and
+deploy changes to an existing stack. Deployment prints the public Caddy URL.
+Use that URL to test repeated query parameters, cookies, and binary responses:
+
+```sh
+curl 'http://PUBLIC_IP/echo?tag=one&tag=two' \
+  -H 'Cookie: session=abc' -H 'X-Test: one' -H 'X-Test: two'
+curl -i http://PUBLIC_IP/cookies
+curl -s http://PUBLIC_IP/binary | od -An -tx1
+```
+
+The echo response includes the raw event headers and `multiValueHeaders` so you
+can inspect the v1 representation. The binary response should contain
+`00 01 fe ff`.
+
 ## Destroy
 
 Remove the test resources, including the ECR repository and image:

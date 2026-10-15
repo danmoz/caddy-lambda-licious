@@ -18,6 +18,12 @@ import (
 )
 
 func TestCaddyProcess(t *testing.T) {
+	for _, format := range []string{"api_gateway_v1", "api_gateway_v2"} {
+		t.Run(format, func(t *testing.T) { testCaddyProcess(t, format) })
+	}
+}
+
+func testCaddyProcess(t *testing.T, format string) {
 	root := repositoryRoot(t)
 	template := filepath.Join(root, ".aws-sam", "build", "template.yaml")
 	if _, err := os.Stat(template); err != nil {
@@ -77,12 +83,12 @@ http://127.0.0.1:%d {
 		lambda {
 			function Lambda
 			endpoint http://127.0.0.1:%d
-			event_format api_gateway_v2
+			event_format %s
 		timeout 30s
 		}
 	}
 }
-`, port, samPort)
+`, port, samPort, format)
 	if err := os.WriteFile(config, []byte(configContents), 0o600); err != nil {
 		t.Fatalf("write Caddyfile: %v", err)
 	}
@@ -117,11 +123,22 @@ http://127.0.0.1:%d {
 			Method  string              `json:"method"`
 			Query   map[string][]string `json:"query"`
 			Headers map[string]string   `json:"headers"`
+			Cookies map[string]string   `json:"cookies"`
+			Event   struct {
+				Headers           map[string]string   `json:"headers"`
+				MultiValueHeaders map[string][]string `json:"multiValueHeaders"`
+			} `json:"event"`
 		}
 		decodeJSON(t, response, &body)
 		if body.Method != http.MethodGet || len(body.Query["tag"]) != 2 || body.Query["tag"][0] != "one" || body.Query["tag"][1] != "two" ||
 			body.Headers["authorization"] != "Bearer test" || body.Headers["x-test"] != "value" {
 			t.Fatalf("unexpected echo response: %#v", body)
+		}
+		if body.Cookies["session"] != "abc" {
+			t.Fatalf("cookies = %#v, want session=abc", body.Cookies)
+		}
+		if format == "api_gateway_v1" && (body.Event.Headers["cookie"] != "session=abc" || len(body.Event.MultiValueHeaders["cookie"]) != 1) {
+			t.Fatalf("v1 cookie headers = %#v", body.Event)
 		}
 	})
 
@@ -135,6 +152,22 @@ http://127.0.0.1:%d {
 		decodeJSON(t, response, &body)
 		if body.Body != `{"hello":"world"}` {
 			t.Fatalf("body = %q", body.Body)
+		}
+	})
+
+	t.Run("binary request body", func(t *testing.T) {
+		req := newRequest(t, http.MethodPost, baseURL+"/echo", strings.NewReader("\x00\x01\xfe\xff"))
+		req.Header.Set("Content-Type", "application/octet-stream")
+		response := doRequest(t, client, req)
+		var body struct {
+			Event struct {
+				Body            string `json:"body"`
+				IsBase64Encoded bool   `json:"isBase64Encoded"`
+			} `json:"event"`
+		}
+		decodeJSON(t, response, &body)
+		if body.Event.Body != "AAH+/w==" || !body.Event.IsBase64Encoded {
+			t.Fatalf("binary event = %#v", body.Event)
 		}
 	})
 

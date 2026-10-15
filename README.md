@@ -153,7 +153,7 @@ The `event_format` setting selects both the request event and response format.
 | ---              | ---       | ---                                                  |
 | `httpjson`       | Available | `HTTPJSON-REQ` and `HTTPJSON-REP` envelopes.         |
 | `api_gateway_v2` | Default   | API Gateway HTTP API payload version 2.0.            |
-| `api_gateway_v1` | Planned   | API Gateway REST/proxy payload version 1.0.          |
+| `api_gateway_v1` | Available | API Gateway REST/proxy payload version 1.0.          |
 | `alb`            | Planned   | Application Load Balancer Lambda event.              |
 | `function_url`   | Planned   | Lambda Function URL event.                           |
 | `lambda_at_edge` | Planned   | CloudFront Lambda@Edge event.                        |
@@ -167,6 +167,29 @@ The Lambda function should return a JSON object with a `type` of
 `HTTPJSON-REP`, optional response metadata in `meta`, and the response body in
 `body`. Response metadata can set the HTTP status and headers; `bodyEncoding`
 can be set to `base64` for binary response bodies.
+
+### API Gateway v1
+
+Set `event_format api_gateway_v1` for the
+[API Gateway REST API Lambda proxy contract](https://docs.aws.amazon.com/apigateway/latest/developerguide/set-up-lambda-proxy-integrations.html).
+Requests include `httpMethod`, the decoded `path`, `headers`,
+`multiValueHeaders`, `queryStringParameters`, and
+`multiValueQueryStringParameters`. The single-value maps contain the last value;
+the multi-value maps preserve repeated values. Cookies stay in the headers.
+
+The adapter uses a `/{proxy+}` resource with a `proxy` path parameter (or `/`
+for the root), stage `$default`, and no stage variables. The request context
+includes the method, path, protocol, domain, request ID, timestamps, and client
+IP and user agent in `identity`. Paths are forwarded without trimming a base
+path. API Gateway account, authorization, and deployment metadata are not
+synthesized.
+
+Responses use `statusCode`, `headers`, `multiValueHeaders`, `body`, and
+`isBase64Encoded`. Response headers are merged case-insensitively; a value
+present in both header maps is emitted once. Use `multiValueHeaders` for
+multiple `Set-Cookie` values. Binary bodies use base64 with
+`isBase64Encoded: true`; requests with no content type and a nonempty body
+also use base64, as in v2.
 
 ### API Gateway v2
 
