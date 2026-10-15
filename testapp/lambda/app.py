@@ -22,6 +22,7 @@ async def echo(request: Request):
     return {
         "method": request.method,
         "query": query,
+        "cookies": request.cookies,
         "headers": {
             "authorization": request.headers.get("authorization"),
             "x-test": request.headers.get("x-test"),
@@ -31,6 +32,7 @@ async def echo(request: Request):
             "body": event.get("body"),
             "isBase64Encoded": event.get("isBase64Encoded", False),
             "headers": event.get("headers", {}),
+            "multiValueHeaders": event.get("multiValueHeaders", {}),
         },
     }
 

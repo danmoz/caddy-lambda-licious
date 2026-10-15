@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -19,6 +20,7 @@ import (
 
 const (
 	eventFormatHTTPJSON     = "httpjson"
+	eventFormatAPIGatewayV1 = "api_gateway_v1"
 	eventFormatAPIGatewayV2 = "api_gateway_v2"
 	defaultMaxBodySize      = 4 * 1024 * 1024
 )
@@ -32,6 +34,35 @@ const (
 // and Reply.meta will contain a default struct with a 200 status and
 // a content-type header of 'application/json'.
 func parseReply(data []byte, format string) (*Reply, error) {
+	if format == eventFormatAPIGatewayV1 {
+		var response APIGatewayV1Response
+		if err := json.Unmarshal(data, &response); err != nil {
+			return nil, fmt.Errorf("decode API Gateway v1 response: %w", err)
+		}
+		if response.StatusCode == 0 {
+			return nil, fmt.Errorf("API Gateway v1 response is missing statusCode")
+		}
+		if response.StatusCode < 200 || response.StatusCode > 599 {
+			return nil, fmt.Errorf("API Gateway v1 response has invalid statusCode %d", response.StatusCode)
+		}
+		headers := make(map[string][]string, len(response.Headers)+len(response.MultiValueHeaders))
+		for key, values := range response.MultiValueHeaders {
+			key = strings.ToLower(key)
+			headers[key] = append(headers[key], values...)
+		}
+		for key, value := range response.Headers {
+			key = strings.ToLower(key)
+			if !slices.Contains(headers[key], value) {
+				headers[key] = append(headers[key], value)
+			}
+		}
+		return &Reply{
+			Type:         "HTTPJSON-REP",
+			Meta:         &ReplyMeta{Status: response.StatusCode, Headers: headers},
+			Body:         response.Body,
+			BodyEncoding: boolEncoding(response.IsBase64Encoded),
+		}, nil
+	}
 	if format == eventFormatAPIGatewayV2 {
 		var response APIGatewayV2Response
 		if err := json.Unmarshal(data, &response); err != nil {
@@ -122,6 +153,8 @@ func newRequestForFormat(w http.ResponseWriter, r *http.Request, format string, 
 	switch format {
 	case eventFormatHTTPJSON:
 		request = newHTTPJSONRequest(r, body)
+	case eventFormatAPIGatewayV1:
+		request = newAPIGatewayV1Request(r, body)
 	case eventFormatAPIGatewayV2:
 		request = newAPIGatewayV2Request(r, body)
 	default:
@@ -145,6 +178,12 @@ func applyUpstreamHeaders(r *http.Request, request any, upstreamHeaders map[stri
 		switch request := request.(type) {
 		case *Request:
 			request.Meta.Headers[key] = append([]string(nil), values...)
+		case *APIGatewayV1Request:
+			request.MultiValueHeaders[key] = values
+			delete(request.Headers, key)
+			if len(values) > 0 {
+				request.Headers[key] = values[len(values)-1]
+			}
 		case *APIGatewayV2Request:
 			request.Headers[key] = strings.Join(values, ",")
 		}
@@ -177,6 +216,64 @@ func newHTTPJSONRequest(r *http.Request, body []byte) *Request {
 		Meta:         newRequestMeta(r),
 		Body:         string(body),
 		BodyEncoding: boolEncoding(encoded),
+	}
+}
+
+func newAPIGatewayV1Request(r *http.Request, body []byte) *APIGatewayV1Request {
+	encoded := requestBodyIsBase64Encoded(r, body, eventFormatAPIGatewayV1)
+	requestBody := string(body)
+	if encoded {
+		requestBody = base64.StdEncoding.EncodeToString(body)
+	}
+	multiHeaders := make(map[string][]string, len(r.Header)+4)
+	for key, values := range r.Header {
+		multiHeaders[strings.ToLower(key)] = slices.Clone(values)
+	}
+	multiHeaders["host"] = []string{r.Host}
+	multiHeaders["x-forwarded-proto"] = []string{requestScheme(r)}
+	multiHeaders["x-forwarded-for"] = []string{requestSourceIP(r)}
+	multiHeaders["x-forwarded-port"] = []string{requestPort(r)}
+	headers := make(map[string]string, len(multiHeaders))
+	for key, values := range multiHeaders {
+		if len(values) > 0 {
+			headers[key] = values[len(values)-1]
+		}
+	}
+	multiQuery := r.URL.Query()
+	query := make(map[string]string, len(multiQuery))
+	for key, values := range multiQuery {
+		query[key] = values[len(values)-1]
+	}
+	resource := "/{proxy+}"
+	pathParameters := map[string]string{"proxy": strings.TrimPrefix(r.URL.Path, "/")}
+	if r.URL.Path == "/" {
+		resource = "/"
+		pathParameters = nil
+	}
+	now := time.Now()
+	return &APIGatewayV1Request{
+		Resource:                        resource,
+		Path:                            r.URL.Path,
+		HTTPMethod:                      r.Method,
+		Headers:                         headers,
+		MultiValueHeaders:               multiHeaders,
+		QueryStringParameters:           query,
+		MultiValueQueryStringParameters: multiQuery,
+		PathParameters:                  pathParameters,
+		RequestContext: APIGatewayV1RequestContext{
+			ResourcePath:     resource,
+			HTTPMethod:       r.Method,
+			Path:             r.URL.Path,
+			Protocol:         r.Proto,
+			RequestID:        r.Header.Get("X-Request-ID"),
+			RequestTime:      now.UTC().Format("02/Jan/2006:15:04:05 -0700"),
+			RequestTimeEpoch: now.UnixMilli(),
+			DomainName:       requestDomainName(r),
+			Stage:            "$default",
+			Identity:         APIGatewayV1Identity{SourceIP: requestSourceIP(r), UserAgent: r.UserAgent()},
+		},
+		Body:            requestBody,
+		IsBase64Encoded: encoded,
 	}
 }
 
@@ -294,7 +391,7 @@ func requestBodyIsBase64Encoded(r *http.Request, body []byte, format string) boo
 		return false
 	}
 	contentType := strings.ToLower(r.Header.Get("Content-Type"))
-	if format == eventFormatAPIGatewayV2 && contentType == "" {
+	if (format == eventFormatAPIGatewayV1 || format == eventFormatAPIGatewayV2) && contentType == "" {
 		return true
 	}
 	mediaType, _, err := mime.ParseMediaType(contentType)
@@ -315,6 +412,49 @@ func isTextualMediaType(mediaType string) bool {
 		mediaType == "application/x-www-form-urlencoded" ||
 		mediaType == "application/x-ndjson" ||
 		mediaType == "application/graphql"
+}
+
+// APIGatewayV1Request is the API Gateway REST API Lambda proxy event.
+type APIGatewayV1Request struct {
+	Resource                        string                     `json:"resource"`
+	Path                            string                     `json:"path"`
+	HTTPMethod                      string                     `json:"httpMethod"`
+	Headers                         map[string]string          `json:"headers"`
+	MultiValueHeaders               map[string][]string        `json:"multiValueHeaders"`
+	QueryStringParameters           map[string]string          `json:"queryStringParameters"`
+	MultiValueQueryStringParameters map[string][]string        `json:"multiValueQueryStringParameters"`
+	PathParameters                  map[string]string          `json:"pathParameters"`
+	StageVariables                  map[string]string          `json:"stageVariables"`
+	RequestContext                  APIGatewayV1RequestContext `json:"requestContext"`
+	Body                            string                     `json:"body"`
+	IsBase64Encoded                 bool                       `json:"isBase64Encoded"`
+}
+
+// APIGatewayV1Response is the API Gateway REST API Lambda proxy response.
+type APIGatewayV1Response struct {
+	StatusCode        int                 `json:"statusCode"`
+	Headers           map[string]string   `json:"headers"`
+	MultiValueHeaders map[string][]string `json:"multiValueHeaders"`
+	Body              string              `json:"body"`
+	IsBase64Encoded   bool                `json:"isBase64Encoded"`
+}
+
+type APIGatewayV1RequestContext struct {
+	ResourcePath     string               `json:"resourcePath"`
+	HTTPMethod       string               `json:"httpMethod"`
+	Path             string               `json:"path"`
+	Protocol         string               `json:"protocol"`
+	RequestID        string               `json:"requestId"`
+	RequestTime      string               `json:"requestTime"`
+	RequestTimeEpoch int64                `json:"requestTimeEpoch"`
+	DomainName       string               `json:"domainName"`
+	Stage            string               `json:"stage"`
+	Identity         APIGatewayV1Identity `json:"identity"`
+}
+
+type APIGatewayV1Identity struct {
+	SourceIP  string `json:"sourceIp"`
+	UserAgent string `json:"userAgent"`
 }
 
 // APIGatewayV2Request is the HTTP API payload format consumed by Mangum.

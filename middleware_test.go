@@ -138,6 +138,10 @@ func TestValidate(t *testing.T) {
 			middleware: Lambda{FunctionName: "test-function", EventFormat: eventFormatAPIGatewayV2},
 		},
 		{
+			name:       "api gateway v1",
+			middleware: Lambda{FunctionName: "test-function", EventFormat: eventFormatAPIGatewayV1},
+		},
+		{
 			name:          "negative max body size",
 			middleware:    Lambda{FunctionName: "test-function", MaxBodySize: -1},
 			wantErrorText: "max_body_size must not be negative",
@@ -226,6 +230,52 @@ func TestServeHTTPReturnsApplicationResponse(t *testing.T) {
 	}
 	if got := w.Header().Values("X-Test"); len(got) != 2 || got[0] != "one" || got[1] != "two" {
 		t.Errorf("X-Test = %#v, want [one two]", got)
+	}
+}
+
+func TestServeHTTPAPIGatewayV1(t *testing.T) {
+	fake := &fakeLambdaInvoker{output: &lambda.InvokeOutput{Payload: []byte(`{"statusCode":201,"headers":{"Content-Type":"application/octet-stream","Connection":"X-Private","X-Private":"secret","Content-Length":"999"},"multiValueHeaders":{"Set-Cookie":["a=1","b=2"]},"body":"AP8=","isBase64Encoded":true}`)}}
+	m := &Lambda{FunctionName: "test-function", EventFormat: eventFormatAPIGatewayV1, Timeout: caddy.Duration(time.Second), log: zap.NewNop(), svc: fake}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/echo?tag=one&tag=two", strings.NewReader("hello"))
+	r.Header.Set("Content-Type", "text/plain")
+	if err := m.ServeHTTP(w, r, nil); err != nil {
+		t.Fatal(err)
+	}
+	var event APIGatewayV1Request
+	if err := json.Unmarshal(fake.input.Payload, &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.HTTPMethod != "POST" || event.Path != "/echo" || event.Body != "hello" || event.IsBase64Encoded || len(event.MultiValueQueryStringParameters["tag"]) != 2 {
+		t.Fatalf("invoked event = %#v", event)
+	}
+	if _, err := uuid.Parse(event.RequestContext.RequestID); err != nil || w.Header().Get("X-Request-ID") != event.RequestContext.RequestID {
+		t.Fatalf("request ID = %q, response ID = %q", event.RequestContext.RequestID, w.Header().Get("X-Request-ID"))
+	}
+	cookies := w.Header().Values("Set-Cookie")
+	if w.Code != 201 || w.Body.String() != "\x00\xff" || w.Header().Get("Content-Type") != "application/octet-stream" || len(cookies) != 2 || cookies[0] != "a=1" || cookies[1] != "b=2" {
+		t.Fatalf("response = %d / %v / %#v", w.Code, w.Body.Bytes(), w.Header())
+	}
+	for _, header := range []string{"Connection", "X-Private", "Content-Length"} {
+		if w.Header().Get(header) != "" {
+			t.Errorf("response leaked %s", header)
+		}
+	}
+}
+
+func TestServeHTTPAPIGatewayV1RejectsInvalidReplyBeforeWriting(t *testing.T) {
+	for _, payload := range []string{`{}`, `{"statusCode":103}`, `{"statusCode":200,"headers":{"X-Test":"value"},"body":"!","isBase64Encoded":true}`} {
+		t.Run(payload, func(t *testing.T) {
+			fake := &fakeLambdaInvoker{output: &lambda.InvokeOutput{Payload: []byte(payload)}}
+			m := &Lambda{FunctionName: "test-function", EventFormat: eventFormatAPIGatewayV1, Timeout: caddy.Duration(time.Second), log: zap.NewNop(), svc: fake}
+			w := httptest.NewRecorder()
+			if err := m.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil), nil); err == nil {
+				t.Fatal("expected response error")
+			}
+			if len(w.Header()) != 0 || w.Body.Len() != 0 || w.Code != http.StatusOK {
+				t.Fatalf("partially written response = %#v", w)
+			}
+		})
 	}
 }
 

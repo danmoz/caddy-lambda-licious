@@ -25,6 +25,17 @@ variable "stack_name" {
   default     = "caddy-lambda-licious-test"
 }
 
+variable "event_format" {
+  description = "Lambda request and response format used by Caddy"
+  type        = string
+  default     = "api_gateway_v1"
+
+  validation {
+    condition     = contains(["api_gateway_v1", "api_gateway_v2"], var.event_format)
+    error_message = "event_format must be api_gateway_v1 or api_gateway_v2 for the Mangum fixture."
+  }
+}
+
 data "aws_availability_zones" "available" {
   state = "available"
 }
@@ -206,7 +217,11 @@ resource "aws_ecs_task_definition" "caddy" {
         },
         {
           name  = "AWS_REGION"
-          value = data.aws_region.current.name
+          value = data.aws_region.current.region
+        },
+        {
+          name  = "LAMBDA_EVENT_FORMAT"
+          value = var.event_format
         }
       ]
 

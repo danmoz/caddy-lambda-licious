@@ -133,6 +133,7 @@ func TestCaddyfileAdaptsLambdaHandler(t *testing.T) {
 			timeout 1d
 			max_body_size 1MB
 			header_upstream X-Test value
+			event_format api_gateway_v1
 		}
 	}
 }`), nil)
@@ -156,6 +157,9 @@ func TestCaddyfileAdaptsLambdaHandler(t *testing.T) {
 
 	if lambda["handler"] != "lambda" || lambda["function"] != "test-function" {
 		t.Fatalf("adapted handler = %#v", lambda)
+	}
+	if lambda["event_format"] != eventFormatAPIGatewayV1 {
+		t.Fatalf("adapted event_format = %#v", lambda["event_format"])
 	}
 	if lambda["region"] != "us-east-1" || lambda["timeout"] != float64(24*time.Hour) || lambda["max_body_size"] != float64(1000000) {
 		t.Fatalf("adapted settings = %#v", lambda)
