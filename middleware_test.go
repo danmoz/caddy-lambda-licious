@@ -68,7 +68,7 @@ func TestInvokeLambdaUsesConfiguredFunctionAndPayload(t *testing.T) {
 
 func TestInvokeLambdaReturnsFunctionError(t *testing.T) {
 	functionError := "Unhandled"
-	core, logs := observer.New(zap.DebugLevel)
+	core, logs := observer.New(zap.ErrorLevel)
 	fake := &fakeLambdaInvoker{output: &lambda.InvokeOutput{
 		FunctionError: &functionError,
 		Payload:       []byte("boom"),
@@ -83,6 +83,9 @@ func TestInvokeLambdaReturnsFunctionError(t *testing.T) {
 	entries := logs.All()
 	if len(entries) != 1 {
 		t.Fatalf("log entries = %d, want 1", len(entries))
+	}
+	if entries[0].Level != zap.ErrorLevel {
+		t.Fatalf("log level = %s, want error", entries[0].Level)
 	}
 	if got := entries[0].ContextMap()["error"]; got == nil || !strings.Contains(got.(string), "Unhandled") {
 		t.Fatalf("logged error = %#v, want Unhandled", got)
@@ -108,12 +111,29 @@ func TestInvokeLambdaLogsSafeDebugFields(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("log entries = %d, want 1", len(entries))
 	}
+	if entries[0].Level != zap.DebugLevel {
+		t.Fatalf("log level = %s, want debug", entries[0].Level)
+	}
 	fields := entries[0].ContextMap()
 	if fields["function"] != "test-function" || fields["request_id"] != "request-123" {
 		t.Fatalf("log fields = %#v, want function and request_id", fields)
 	}
 	if _, ok := fields["duration"]; !ok {
 		t.Fatal("log fields missing duration")
+	}
+}
+
+func TestInvokeLambdaLogsThrottlingAtWarnLevel(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	fake := &fakeLambdaInvoker{err: &smithy.GenericAPIError{Code: "TooManyRequestsException", Message: "throttled"}}
+	m := &Lambda{FunctionName: "test-function", Timeout: caddy.Duration(time.Second), log: zap.New(core), svc: fake}
+
+	if _, err := m.invokeLambda(context.Background(), struct{}{}, "request-123"); err == nil {
+		t.Fatal("invokeLambda() error = nil, want throttling error")
+	}
+	entries := logs.All()
+	if len(entries) != 1 || entries[0].Level != zap.WarnLevel {
+		t.Fatalf("logs = %#v, want one warning", entries)
 	}
 }
 
