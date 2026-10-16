@@ -40,6 +40,7 @@ By default, the plugin will forward events using the `api_gateway_v2` event form
       qualifier prod
       region us-east-1
       event_format api_gateway_v2
+      response_request_id false
       timeout 10s
       max_body_size 1MB
       header_upstream X-Forwarded-Host {http.request.host}
@@ -62,6 +63,7 @@ By default, the plugin will forward events using the `api_gateway_v2` event form
 | `region`            | AWS region used for the Lambda client.           | (required if no SDK)     |
 | `qualifier`         | Lambda version number or alias to invoke.        | Unqualified function     |
 | `event_format`      | Lambda request and response contract.            | `api_gateway_v2`         |
+| `response_request_id` | Include the request ID in the HTTP response header. | `true`                   |
 | `timeout`           | Max duration of a synchronous invocation.        | `14m`                    |
 | `max_body_size`     | Max request body size; Caddyfile accepts units.  | `4MB`                    |
 | `header_upstream`   | Header values added to the Lambda request.       | Not set                  |
@@ -214,7 +216,9 @@ Every invocation has a request ID. If the incoming request includes an
 `X-Request-ID` header, its value is preserved; otherwise, caddy-lambda-licious
 generates a UUID matching the format used by AWS API Gateway. The request ID 
 is used consistently in `requestContext.requestId` and structured logs, and 
-is returned to the client in the `X-Request-ID` response header.
+is returned to the client in the `X-Request-ID` response header by default.
+Set `response_request_id false` to omit that response header; the ID is still
+included in the Lambda event and structured logs.
 
 ## Logging
 

@@ -46,17 +46,18 @@ func init() {
 
 // Lambda implements an HTTP handler that invokes a Lambda function.
 type Lambda struct {
-	FunctionName    string              `json:"function,omitempty"`
-	Qualifier       string              `json:"qualifier,omitempty"`
-	Endpoint        string              `json:"endpoint,omitempty"`
-	Region          string              `json:"region,omitempty"`
-	EventFormat     string              `json:"event_format,omitempty"`
-	Timeout         caddy.Duration      `json:"timeout,omitempty"`
-	MaxBodySize     int64               `json:"max_body_size,omitempty"`
-	RoleARN         string              `json:"role_arn,omitempty"`
-	ExternalID      string              `json:"external_id,omitempty"`
-	SessionName     string              `json:"session_name,omitempty"`
-	UpstreamHeaders map[string][]string `json:"header_upstream,omitempty"`
+	FunctionName      string              `json:"function,omitempty"`
+	Qualifier         string              `json:"qualifier,omitempty"`
+	Endpoint          string              `json:"endpoint,omitempty"`
+	Region            string              `json:"region,omitempty"`
+	EventFormat       string              `json:"event_format,omitempty"`
+	ResponseRequestID *bool               `json:"response_request_id,omitempty"`
+	Timeout           caddy.Duration      `json:"timeout,omitempty"`
+	MaxBodySize       int64               `json:"max_body_size,omitempty"`
+	RoleARN           string              `json:"role_arn,omitempty"`
+	ExternalID        string              `json:"external_id,omitempty"`
+	SessionName       string              `json:"session_name,omitempty"`
+	UpstreamHeaders   map[string][]string `json:"header_upstream,omitempty"`
 
 	log *zap.Logger
 	svc lambdaInvoker
@@ -246,7 +247,9 @@ func (m *Lambda) ServeHTTP(w http.ResponseWriter, r *http.Request, _ caddyhttp.H
 		reply.Meta.Status = http.StatusOK
 	}
 
-	w.Header().Set("X-Request-ID", requestID)
+	if m.ResponseRequestID == nil || *m.ResponseRequestID {
+		w.Header().Set("X-Request-ID", requestID)
+	}
 
 	w.WriteHeader(reply.Meta.Status)
 

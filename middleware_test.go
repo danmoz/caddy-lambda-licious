@@ -331,6 +331,29 @@ func TestServeHTTPPreservesExistingRequestID(t *testing.T) {
 	}
 }
 
+func TestServeHTTPSkipsResponseRequestIDWhenDisabled(t *testing.T) {
+	includeRequestID := false
+	fake := &fakeLambdaInvoker{output: &lambda.InvokeOutput{Payload: []byte(`{"statusCode":200,"body":"ok"}`)}}
+	m := &Lambda{FunctionName: "test-function", EventFormat: eventFormatAPIGatewayV2, ResponseRequestID: &includeRequestID, Timeout: caddy.Duration(time.Second), log: zap.NewNop(), svc: fake}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("X-Request-ID", "existing-id")
+
+	if err := m.ServeHTTP(w, r, nil); err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if got := w.Header().Get("X-Request-ID"); got != "" {
+		t.Errorf("X-Request-ID response header = %q, want absent", got)
+	}
+	var event APIGatewayV2Request
+	if err := json.Unmarshal(fake.input.Payload, &event); err != nil {
+		t.Fatalf("decode request payload: %v", err)
+	}
+	if got := event.RequestContext.RequestID; got != "existing-id" {
+		t.Errorf("Lambda request ID = %q, want existing-id", got)
+	}
+}
+
 func TestServeHTTPLimitsLoggedRequestID(t *testing.T) {
 	core, logs := observer.New(zap.DebugLevel)
 	fake := &fakeLambdaInvoker{output: &lambda.InvokeOutput{Payload: []byte(`{"type":"HTTPJSON-REP","meta":{"status":200},"body":"ok"}`)}}

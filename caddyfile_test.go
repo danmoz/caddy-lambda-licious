@@ -17,6 +17,7 @@ func TestUnmarshalCaddyfileEndpoint(t *testing.T) {
 			qualifier prod
 			endpoint http://127.0.0.1:3001
 			region us-east-1
+			response_request_id false
 			timeout 1d
 			max_body_size 1MB
 			role_arn arn:aws:iam::123456789012:role/test
@@ -38,6 +39,9 @@ func TestUnmarshalCaddyfileEndpoint(t *testing.T) {
 	}
 	if m.Region != "us-east-1" {
 		t.Errorf("Region = %q, want %q", m.Region, "us-east-1")
+	}
+	if m.ResponseRequestID == nil || *m.ResponseRequestID {
+		t.Errorf("ResponseRequestID = %v, want false", m.ResponseRequestID)
 	}
 	if time.Duration(m.Timeout) != 24*time.Hour {
 		t.Errorf("Timeout = %v, want %v", m.Timeout, 24*time.Hour)
@@ -134,6 +138,7 @@ func TestCaddyfileAdaptsLambdaHandler(t *testing.T) {
 			max_body_size 1MB
 			header_upstream X-Test value
 			event_format api_gateway_v1
+			response_request_id false
 		}
 	}
 }`), nil)
@@ -160,6 +165,9 @@ func TestCaddyfileAdaptsLambdaHandler(t *testing.T) {
 	}
 	if lambda["event_format"] != eventFormatAPIGatewayV1 {
 		t.Fatalf("adapted event_format = %#v", lambda["event_format"])
+	}
+	if lambda["response_request_id"] != false {
+		t.Fatalf("adapted response_request_id = %#v, want false", lambda["response_request_id"])
 	}
 	if lambda["region"] != "us-east-1" || lambda["timeout"] != float64(24*time.Hour) || lambda["max_body_size"] != float64(1000000) {
 		t.Fatalf("adapted settings = %#v", lambda)

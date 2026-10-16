@@ -1,6 +1,8 @@
 package caddylambdalicious
 
 import (
+	"strconv"
+
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
@@ -30,6 +32,7 @@ func parseCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error)
 //	    endpoint <url>
 //	    region <region>
 //	    event_format <api_gateway_v1|api_gateway_v2|httpjson>
+//	    response_request_id <true|false>
 //	    timeout  <duration>
 //	    max_body_size <bytes>
 //	    role_arn <role ARN>
@@ -41,6 +44,21 @@ func (m *Lambda) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		for d.NextBlock(0) {
 			switch d.Val() {
+			case "response_request_id":
+				if m.ResponseRequestID != nil {
+					return d.Err("response_request_id already specified")
+				}
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				value, err := strconv.ParseBool(d.Val())
+				if err != nil {
+					return d.Errf("invalid response_request_id: %v", err)
+				}
+				if d.NextArg() {
+					return d.ArgErr()
+				}
+				m.ResponseRequestID = &value
 			case "function":
 				if m.FunctionName != "" {
 					return d.Err("function already specified")
