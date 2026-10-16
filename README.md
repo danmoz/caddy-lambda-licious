@@ -225,12 +225,11 @@ included in the Lambda event and structured logs.
 HTTP access logging remains Caddy's responsibility. This module does not log
 credentials, headers, or request/response bodies.
 
-At `DEBUG` level, every attempted Lambda invocation emits the function name,
-invocation duration, and a request ID. Failed
-invocations also include the contextual error. At `INFO`, `WARN`, and `ERROR`
-levels, the module does not emit a separate per-invocation record. Invocation
-failures are returned as contextual handler errors for Caddy to log and convert
-into an HTTP error response through its normal error handling configuration.
+Successful Lambda invocations log their function name, duration, and request ID
+at `DEBUG`. Throttling is logged at `WARN`; other invocation failures are logged
+at `ERROR`. Failed invocations include the contextual error and are returned to
+Caddy for normal HTTP error handling, so Caddy may also log the resulting 5xx
+response.
 
 ## Development
 
