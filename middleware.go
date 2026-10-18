@@ -291,6 +291,12 @@ func (m *Lambda) invokeLambda(ctx context.Context, req any, requestID string) (p
 		logFields := []zap.Field{zap.Duration("duration", time.Since(startTime))}
 		if err != nil {
 			logFields = append(logFields, zap.Error(err))
+			if lambdaErrorStatus(err) == http.StatusServiceUnavailable {
+				log.Warn("Lambda invocation failed", logFields...)
+			} else {
+				log.Error("Lambda invocation failed", logFields...)
+			}
+			return
 		}
 		log.Debug("Lambda invocation complete", logFields...)
 	}()
