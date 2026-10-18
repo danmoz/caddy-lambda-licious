@@ -1,19 +1,27 @@
-name: Tag release
+name: Bump release tag
 
 on:
   workflow_dispatch:
     inputs:
-      tag:
-        description: Release tag, for example v1.0.0
+      bump:
+        description: Semantic version increment
         required: true
-        type: string
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-tag
+  cancel-in-progress: false
+
 jobs:
   tag:
-    name: Tag release
+    name: Bump release tag
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
@@ -21,18 +29,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate tag
-        shell: bash
+      - name: Require master branch
+        if: github.ref != 'refs/heads/master'
         run: |
-          if [[ ! "${{ inputs.tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Tag must match the pattern v<major>.<minor>.<patch> (e.g. v1.0.0)"
-            exit 1
-          fi
+          echo "::error::Run this workflow from master to create a release tag."
+          exit 1
 
-      - name: Create and push tag
-        uses: rickstaa/action-create-tag@a1c7777fcb2fee4f19b0f283ba888afa11678b72 # v1.7.2
+      - name: Bump and push semver tag
+        uses: mathieudutour/github-tag-action@af99e60ce8132224b8e6ebab5023449fe256ed46 # v7
         with:
-          tag: ${{ inputs.tag }}
-          message: Release ${{ inputs.tag }}
-          commit_sha: ${{ github.sha }}
           github_token: ${{ github.token }}
+          force_bump: ${{ inputs.bump }}
+          release_branches: master
+          default_bump: false
+          create_annotated_tag: true
