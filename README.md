@@ -107,6 +107,9 @@ The default 4 MiB limit leaves some headroom, but unusually large headers may re
 | `503` | AWS rejected the invocation with `TooManyRequestsException`. |
 | `504` | Lambda invocation exceeded the configured timeout. |
 
+If the client cancels the request during invocation, the handler returns without
+writing a response or invoking Caddy's error handlers.
+
 The plugin does not generate application statuses such as `400`, `401`, `403`,
 or `404`; Lambda responses should supply those statuses when appropriate.
 
@@ -206,9 +209,9 @@ Responses use the standard `statusCode`, `headers`, `cookies`, `body`, and
 `Set-Cookie` header.
 
 The API Gateway v2 adapter maps Caddy's request path directly to `rawPath`;
-it does not trim a base path. AWS invocation errors, Lambda function
-errors, timeouts, throttling, and malformed responses are returned as Caddy
-handler errors.
+it does not trim a base path. AWS invocation errors (except client cancellations),
+Lambda function errors, timeouts, throttling, and malformed responses are returned
+as Caddy handler errors.
 
 Every invocation has a request ID. If the incoming request includes an 
 `X-Request-ID` header, its value is preserved; otherwise, caddy-lambda-licious
@@ -222,10 +225,14 @@ HTTP access logging remains Caddy's responsibility. This module does not log
 credentials, headers, or request/response bodies.
 
 Successful Lambda invocations log their function name, duration, and request ID
-at `DEBUG`. Throttling is logged at `WARN`; other invocation failures are logged
-at `ERROR`. Failed invocations include the contextual error and are returned to
-Caddy for normal HTTP error handling, so Caddy may also log the resulting 5xx
-response.
+at `DEBUG`. Invocations canceled by the client are also logged at `DEBUG` and
+skip normal HTTP error handling. Throttling is logged at `WARN`; other invocation
+failures, including timeouts, are logged at `ERROR`. Failed invocations include
+the contextual error and are returned to Caddy for normal HTTP error handling,
+so Caddy may also log the resulting 5xx response.
+
+Response body write failures are logged at `WARN` as "aborting with incomplete
+response" and abort the response with `http.ErrAbortHandler`.
 
 ## Development
 

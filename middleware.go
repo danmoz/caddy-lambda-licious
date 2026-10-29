@@ -174,6 +174,9 @@ func (m *Lambda) ServeHTTP(w http.ResponseWriter, r *http.Request, _ caddyhttp.H
 	resp, err := m.invokeLambda(r.Context(), req, loggedRequestID)
 
 	if err != nil {
+		if errors.Is(r.Context().Err(), context.Canceled) {
+			return nil
+		}
 		return caddyhttp.Error(lambdaErrorStatus(err), err)
 	}
 
@@ -254,8 +257,11 @@ func (m *Lambda) ServeHTTP(w http.ResponseWriter, r *http.Request, _ caddyhttp.H
 	if reply.Meta.Status == http.StatusNoContent || reply.Meta.Status == http.StatusNotModified {
 		return nil
 	}
-	_, err = w.Write(bodyBytes)
-	return err
+	if _, err := w.Write(bodyBytes); err != nil {
+		m.log.Warn("aborting with incomplete response", zap.Error(err))
+		panic(http.ErrAbortHandler)
+	}
+	return nil
 }
 
 // newRequestID returns a collision-resistant correlation ID in the same
@@ -277,8 +283,8 @@ func lambdaErrorStatus(err error) int {
 	return http.StatusBadGateway
 }
 
-func (m *Lambda) invokeLambda(ctx context.Context, req any, requestID string) (payload []byte, err error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(m.Timeout))
+func (m *Lambda) invokeLambda(parentCtx context.Context, req any, requestID string) (payload []byte, err error) {
+	ctx, cancel := context.WithTimeout(parentCtx, time.Duration(m.Timeout))
 	defer cancel()
 
 	fields := []zap.Field{zap.String("function", m.FunctionName)}
@@ -291,7 +297,9 @@ func (m *Lambda) invokeLambda(ctx context.Context, req any, requestID string) (p
 		logFields := []zap.Field{zap.Duration("duration", time.Since(startTime))}
 		if err != nil {
 			logFields = append(logFields, zap.Error(err))
-			if lambdaErrorStatus(err) == http.StatusServiceUnavailable {
+			if errors.Is(parentCtx.Err(), context.Canceled) {
+				log.Debug("Lambda invocation canceled by client", logFields...)
+			} else if lambdaErrorStatus(err) == http.StatusServiceUnavailable {
 				log.Warn("Lambda invocation failed", logFields...)
 			} else {
 				log.Error("Lambda invocation failed", logFields...)

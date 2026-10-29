@@ -14,8 +14,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/smithy-go"
 	"github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
 
@@ -474,6 +476,125 @@ func TestInvokeLambdaReturnsTimeout(t *testing.T) {
 
 	if _, err := m.invokeLambda(context.Background(), struct{}{}, ""); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("invokeLambda() error = %v, want deadline exceeded", err)
+	}
+}
+
+type trackingResponseWriter struct {
+	*httptest.ResponseRecorder
+	wroteHeader bool
+	writeErr    error
+}
+
+func (w *trackingResponseWriter) WriteHeader(status int) {
+	w.wroteHeader = true
+	w.ResponseRecorder.WriteHeader(status)
+}
+
+func (w *trackingResponseWriter) Write(body []byte) (int, error) {
+	if w.writeErr != nil {
+		return 0, w.writeErr
+	}
+	return w.ResponseRecorder.Write(body)
+}
+
+func TestServeHTTPClientCancellation(t *testing.T) {
+	for _, invokeErr := range []error{context.Canceled, errors.New("invoke failed after cancellation")} {
+		t.Run(invokeErr.Error(), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			started := make(chan struct{})
+			go func() {
+				<-started
+				cancel()
+			}()
+			fake := &fakeLambdaInvoker{invoke: func(ctx context.Context, _ *lambda.InvokeInput) (*lambda.InvokeOutput, error) {
+				close(started)
+				<-ctx.Done()
+				return nil, invokeErr
+			}}
+			core, logs := observer.New(zap.DebugLevel)
+			m := &Lambda{FunctionName: "test-function", Timeout: caddy.Duration(time.Second), log: zap.New(core), svc: fake}
+			w := &trackingResponseWriter{ResponseRecorder: httptest.NewRecorder()}
+			r := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
+			r.Header.Set("X-Request-ID", "request-123")
+
+			if err := m.ServeHTTP(w, r, nil); err != nil {
+				t.Fatalf("ServeHTTP() error = %v, want nil", err)
+			}
+			if w.wroteHeader || w.Body.Len() != 0 {
+				t.Fatalf("response written: headers = %v, body = %q", w.wroteHeader, w.Body.String())
+			}
+			entries := logs.All()
+			if len(entries) != 1 || entries[0].Level != zap.DebugLevel || entries[0].Message != "Lambda invocation canceled by client" {
+				t.Fatalf("logs = %#v, want one client cancellation debug entry", entries)
+			}
+			fields := entries[0].ContextMap()
+			if fields["function"] != "test-function" || fields["request_id"] != "request-123" || fields["duration"] == nil || fields["error"] == nil {
+				t.Fatalf("log fields = %#v, want function, request_id, duration, and error", fields)
+			}
+		})
+	}
+}
+
+func TestServeHTTPInvocationErrors(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		err    error
+		status int
+		level  zapcore.Level
+	}{
+		{"timeout", context.DeadlineExceeded, http.StatusGatewayTimeout, zap.ErrorLevel},
+		{"generic", errors.New("invoke failed"), http.StatusBadGateway, zap.ErrorLevel},
+		{"throttled", &smithy.GenericAPIError{Code: "TooManyRequestsException"}, http.StatusServiceUnavailable, zap.WarnLevel},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &fakeLambdaInvoker{invoke: func(ctx context.Context, _ *lambda.InvokeInput) (*lambda.InvokeOutput, error) {
+				if test.err == context.DeadlineExceeded {
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}
+				return nil, test.err
+			}}
+			core, logs := observer.New(zap.DebugLevel)
+			m := &Lambda{FunctionName: "test-function", Timeout: caddy.Duration(time.Millisecond), log: zap.New(core), svc: fake}
+			w := &trackingResponseWriter{ResponseRecorder: httptest.NewRecorder()}
+			err := m.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil), nil)
+			var handlerErr caddyhttp.HandlerError
+			if !errors.As(err, &handlerErr) || handlerErr.StatusCode != test.status || !errors.Is(err, test.err) {
+				t.Fatalf("ServeHTTP() error = %v, want HandlerError %d wrapping %v", err, test.status, test.err)
+			}
+			if w.wroteHeader || w.Body.Len() != 0 {
+				t.Fatal("ServeHTTP() wrote a response before returning the error")
+			}
+			entries := logs.All()
+			if len(entries) != 1 || entries[0].Level != test.level || entries[0].Message != "Lambda invocation failed" {
+				t.Fatalf("logs = %#v, want one invocation failure at %s", entries, test.level)
+			}
+		})
+	}
+}
+
+func TestServeHTTPBodyWriteFailureAborts(t *testing.T) {
+	writeErr := errors.New("connection closed")
+	w := &trackingResponseWriter{ResponseRecorder: httptest.NewRecorder(), writeErr: writeErr}
+	fake := &fakeLambdaInvoker{output: &lambda.InvokeOutput{Payload: []byte(`{"statusCode":200,"body":"ok"}`)}}
+	core, logs := observer.New(zap.WarnLevel)
+	m := &Lambda{FunctionName: "test-function", Timeout: caddy.Duration(time.Second), log: zap.New(core), svc: fake}
+
+	defer func() {
+		if got := recover(); got != http.ErrAbortHandler {
+			t.Fatalf("panic = %v, want http.ErrAbortHandler", got)
+		}
+		if !w.wroteHeader || w.Code != http.StatusOK {
+			t.Fatal("expected response headers before body write failure")
+		}
+		entries := logs.All()
+		if len(entries) != 1 || entries[0].Level != zap.WarnLevel || entries[0].Message != "aborting with incomplete response" || entries[0].ContextMap()["error"] != writeErr.Error() {
+			t.Fatalf("logs = %#v, want one incomplete response warning with write error", entries)
+		}
+	}()
+	if err := m.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil), nil); err != nil {
+		t.Fatalf("ServeHTTP() returned error instead of panicking: %v", err)
 	}
 }
 
